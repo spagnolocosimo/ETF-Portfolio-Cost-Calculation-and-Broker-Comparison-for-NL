@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ETF Portfolio Cost Calculator - Readable</title>
+<script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+html,body,#root{margin:0;padding:0;width:100%;height:100%;background:#08080f;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useMemo } = React;
+
+
+// ─── Cosimo Spagnolo - 30 May 2026 ──── https://www.linkedin.com/in/cspagnolo/
+// ─── ETF DATA ─────────────────────────────────────────────────────────────────
+
+const ALL_ETFS = [
+  { id:"vwce", ticker:"VWCE", name:"Vanguard FTSE All-World Acc",           category:"All World",     ter:0.19, isin:"IE00B3RBWM25", acc:true,  risk:2 },
+  { id:"iusq", ticker:"IUSQ", name:"iShares MSCI ACWI UCITS ETF",           category:"All World",     ter:0.20, isin:"IE00B6R52259", acc:true,  risk:2 },
+  { id:"vapx", ticker:"VAPX", name:"Vanguard FTSE Dev. Asia Pac ex-JP",     category:"Asia",          ter:0.15, isin:"IE00B9F5YL18", acc:true,  risk:3 },
+  { id:"ijpa", ticker:"IJPA", name:"iShares Core MSCI Japan IMI",           category:"Japan",         ter:0.12, isin:"IE00B4L5YX21", acc:true,  risk:2 },
+  { id:"eimi", ticker:"EIMI", name:"iShares MSCI Emerging Markets",         category:"Em. Markets",   ter:0.18, isin:"IE00BKM4GZ66", acc:true,  risk:4 },
+  { id:"xmme", ticker:"XMME", name:"Xtrackers MSCI EM Swap UCITS ETF",     category:"Em. Markets",   ter:0.18, isin:"LU0292107645", acc:true,  risk:4 },
+  { id:"ainf", ticker:"AINF", name:"iShares AI Infrastructure UCITS ETF",  category:"AI Infra",      ter:0.35, isin:"IE0003A5LT49", acc:true,  risk:4 },
+  { id:"aipo", ticker:"AIPO", name:"Defiance AI & Power Infra UCITS ETF",  category:"AI Infra",      ter:0.69, isin:"IE000LZA1ET3", acc:true,  risk:4 },
+  { id:"rbot", ticker:"RBOT", name:"iShares Automation & Robotics UCITS",  category:"Robotics",      ter:0.40, isin:"IE00BYZK4552", acc:true,  risk:4 },
+  { id:"robo", ticker:"ROBO", name:"ROBO Global Robotics & Automation",    category:"Robotics",      ter:0.80, isin:"IE00BMW3QX54", acc:false, risk:4 },
+  { id:"jedi", ticker:"JEDI", name:"VanEck Space Innovators UCITS ETF",    category:"Space",         ter:0.55, isin:"IE000YU9K6K2", acc:true,  risk:5 },
+  { id:"qntm", ticker:"QNTM", name:"VanEck Quantum Computing UCITS ETF",   category:"Quantum",       ter:0.50, isin:"IE0009H0BLK0", acc:true,  risk:5 },
+  { id:"qant", ticker:"QANT", name:"iShares STOXX Quantum Computing ETF",  category:"Quantum",       ter:0.50, isin:"IE000BMZP0I6", acc:true,  risk:5 },
+  { id:"nukl", ticker:"NUKL", name:"VanEck Uranium & Nuclear Tech UCITS",  category:"Nuclear",       ter:0.50, isin:"IE000M7V94E1", acc:true,  risk:4 },
+  { id:"nukz", ticker:"NUKZ", name:"HANetf Nuclear Renaissance UCITS ETF", category:"Nuclear",       ter:0.65, isin:"IE000HBSRC83", acc:true,  risk:4 },
+  { id:"iqqh", ticker:"IQQH", name:"iShares Global Clean Energy UCITS",    category:"Energy",        ter:0.65, isin:"IE00B1XNHC34", acc:true,  risk:3 },
+  { id:"v9n",  ticker:"V9N",  name:"Global X Data Center REITs UCITS ETF", category:"Datacenter",    ter:0.50, isin:"IE00BMH5Y327", acc:true,  risk:3 },
+  { id:"smh",  ticker:"SMH",  name:"VanEck Semiconductor UCITS ETF",       category:"Semiconductors",ter:0.35, isin:"IE00BMC38736", acc:true,  risk:3 },
+  { id:"semi", ticker:"SEMI", name:"iShares MSCI Global Semiconductors",   category:"Semiconductors",ter:0.35, isin:"IE000I8KRLL9", acc:true,  risk:3 },
+];
+
+// ─── BROKER DATA ─────────────────────────────────────────────────────────────
+// txFee(amount, isSavingsPlan) → € per execution
+// platformFee → annual fee. Either a fraction/year on AUM or a function returning annual € fee
+// subscriptionFee → €/month flat
+
+const BROKERS = [
+  {
+    id:"degiro", name:"DEGIRO", color:"#00c87a", group:"NL",
+    // Core Selection on Tradegate: €1 flat. Non-core: €3+0.03% (not modelled here)
+    txFee:(amt, sp=false) => sp ? 1 : 1,
+    platformFee:0, subscriptionFee:0,
+    note:"€1 flat/trade (Core Selection, Tradegate). No platform fee, no subscription.",
+    savingsPlan: false,
+  },
+  {
+    id:"abn", name:"ABN AMRO", color:"#00b4a8", group:"NL",
+    txFee:() => 0,
+    // ABN Zelf Beleggen Basis service fee tiers:
+    // 0.20% p.a. up to €100k, 0.12% from €100k-€400k, 0.06% above €400k.
+    platformFee:(aum) => {
+      const tier1 = Math.min(Math.max(aum,0), 100000) * 0.0020;
+      const tier2 = Math.min(Math.max(aum - 100000,0), 300000) * 0.0012;
+      const tier3 = Math.max(aum - 400000,0) * 0.0006;
+      return tier1 + tier2 + tier3;
+    },
+    subscriptionFee:0,
+    note:"€0 tx (base assortment ETFs/funds). Tiered service fee: 0.20% ≤€100k, 0.12% €100k-€400k, 0.06% >€400k p.a.",
+    savingsPlan: true,
+  },
+  {
+    id:"scalable_free", name:"Scalable (Free)", color:"#4fc3f7", group:"EU",
+    // Free tier: €0 for PRIME ETFs ≥€250 (covers all our ETFs), else €0.99; savings plans €0
+    txFee:(amt, sp=false) => sp ? 0 : (amt >= 250 ? 0 : 0.99),
+    platformFee:0, subscriptionFee:0,
+    note:"€0 for PRIME ETFs ≥€250 (iShares, Vanguard, Xtrackers, Amundi). €0 savings plans. No subscription.",
+    savingsPlan: true,
+  },
+  {
+    id:"scalable_prime", name:"Scalable PRIME+", color:"#0288d1", group:"EU",
+    // PRIME+: €4.99/mo; €0 for all trades ≥€250, else €0.99; €0 savings plans
+    txFee:(amt, sp=false) => sp ? 0 : (amt >= 250 ? 0 : 0.99),
+    platformFee:0, subscriptionFee:4.99,
+    note:"€0 for any trade ≥€250 · €0 savings plans · €4.99/mo subscription.",
+    savingsPlan: true,
+  },
+  {
+    id:"tr", name:"Trade Republic", color:"#e8f5e9", group:"EU",
+    // €1 flat per manual trade; savings plans are FREE
+    txFee:(amt, sp=false) => sp ? 0 : 1,
+    platformFee:0, subscriptionFee:0,
+    note:"€1/trade (manual). €0 for savings plan executions. No platform fee.",
+    savingsPlan: true,
+  },
+  {
+    id:"bunq_elite", name:"bunq Elite", color:"#5c62ff", group:"NL",
+    txFee:(amt) => amt * 0.00495,
+    platformFee:0, subscriptionFee:18.99,
+    note:"Approx. 0.495% per trade with Elite discount + €18.99/mo subscription. Check live bunq pricing before use.",
+    savingsPlan: false,
+  },
+  {
+    id:"ibkr", name:"IBKR Pro", color:"#ffb300", group:"Global",
+    // €3 flat for trades ≤€6,000; 0.05% for larger trades.
+    // + Euronext NL/BE/FR exchange fee: €0.75/execution (ETFs on Euronext).
+    // No custody fee, no platform fee, no inactivity fee.
+    txFee:(amt) => {
+      const commission = amt <= 6000 ? 3 : amt * 0.0005;
+      const exchangeFee = 0.75; // Euronext ETF pass-through
+      return commission + exchangeFee;
+    },
+    platformFee:0, subscriptionFee:0,
+    note:"€3 flat/trade (≤€6k) + €0.75 Euronext exchange fee. 0.05% for trades >€6k. No custody/platform fee.",
+    savingsPlan: false,
+  },
+];
+
+const FREQS = [
+  { id:"monthly",   label:"Monthly",   months:1  },
+  { id:"bimonthly", label:"2 months",  months:2  },
+  { id:"quarterly", label:"Quarterly", months:3  },
+  { id:"semi",      label:"6 months",  months:6  },
+  { id:"annual",    label:"Yearly",    months:12 },
+];
+
+const CATEGORIES = ["All World","Asia","Japan","Em. Markets","AI Infra","Robotics","Space","Quantum","Nuclear","Energy","Datacenter","Semiconductors"];
+const RISK_COLOR = ["","#4ade80","#86efac","#facc15","#fb923c","#f87171"];
+
+// ─── SIMULATION ───────────────────────────────────────────────────────────────
+
+function getAnnualPlatformFee(broker, aum) {
+  if (typeof broker.platformFee === "function") return broker.platformFee(aum);
+  return Math.max(aum, 0) * (broker.platformFee || 0);
+}
+
+function simulate({ lumpsum, periodicAmt, freqMonths, years, etfWeights, broker, grossReturn, inflation, useSavingsPlan }) {
+  const totalMonths     = years * 12;
+  const nominalRate     = grossReturn / 100;
+  const inflationRate   = inflation / 100;
+  const monthlyNominal  = Math.pow(1 + nominalRate, 1/12) - 1;
+
+  const avgTer     = etfWeights.reduce((s,{etf,w})=>s+etf.ter*w, 0);
+  // TER is modelled as a monthly drag. Use this only if grossReturn is before ETF costs.
+  const monthlyTer = 1 - Math.pow(1 - avgTer/100, 1/12);
+
+  const initialTx = broker.txFee(lumpsum, false); // lump sum is always a manual trade
+  let nominal = Math.max(0, lumpsum - initialTx);
+
+  let totalInvested     = lumpsum;
+  let totalTxCost       = initialTx;
+  let totalTerCost      = 0;
+  let totalPlatformFee  = 0;
+  let totalSubscription = 0;
+
+  const realValue = (month) => nominal / Math.pow(1 + inflationRate, month/12);
+  const snapshots = [{ year:0, nominal, real:realValue(0), invested:lumpsum }];
+
+  for (let m = 1; m <= totalMonths; m++) {
+    // Gross nominal market growth
+    nominal += nominal * monthlyNominal;
+
+    // ETF TER drag. Do not apply if the selected return already comes from ETF NAV history.
+    const terDrag = nominal * monthlyTer;
+    nominal -= terDrag;
+    totalTerCost += terDrag;
+
+    // Periodic investment. Transaction fee is deducted from the amount invested.
+    if (m % freqMonths === 0) {
+      const isSP = useSavingsPlan && broker.savingsPlan;
+      const tx   = broker.txFee(periodicAmt, isSP);
+      totalTxCost += tx;
+      nominal += Math.max(0, periodicAmt - tx);
+      totalInvested += periodicAmt;
+    }
+
+    // Platform/service fee, including tiered ABN fee. Deducted from portfolio value.
+    const pf = getAnnualPlatformFee(broker, nominal) / 12;
+    nominal -= pf;
+    totalPlatformFee += pf;
+
+    // Subscription fee. Deducted from portfolio value to compare total wealth consistently.
+    const sub = broker.subscriptionFee || 0;
+    nominal -= sub;
+    totalSubscription += sub;
+
+    // Avoid impossible negative portfolio values in extreme cost scenarios.
+    nominal = Math.max(0, nominal);
+
+    if (m % 12 === 0) {
+      snapshots.push({
+        year: m / 12,
+        nominal: Math.round(nominal),
+        real:    Math.round(realValue(m)),
+        invested:Math.round(totalInvested),
+      });
+    }
+  }
+
+  return {
+    snapshots, avgTer, totalInvested,
+    finalNominal: nominal,
+    finalReal: realValue(totalMonths),
+    totalTxCost, totalTerCost, totalPlatformFee, totalSubscription,
+    totalCosts: totalTxCost + totalTerCost + totalPlatformFee + totalSubscription,
+  };
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+
+const fmt  = (n, d=0) => n == null ? "—" : "€" + Number(n).toLocaleString("nl-NL",{minimumFractionDigits:d,maximumFractionDigits:d});
+const pct  = (n, d=2) => n == null ? "—" : (+n).toFixed(d) + "%";
+
+// ─── SUBCOMPONENTS ────────────────────────────────────────────────────────────
+
+function Divider({ label }) {
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:12, margin:"28px 0 18px" }}>
+      <div style={{ flex:1, height:1, background:"#0f0f1c" }} />
+      <span style={{ fontSize:9, letterSpacing:3, color:"#a8b0d0", textTransform:"uppercase", whiteSpace:"nowrap" }}>{label}</span>
+      <div style={{ flex:1, height:1, background:"#0f0f1c" }} />
+    </div>
+  );
+}
+
+function NumInput({ label, value, onChange, step=500, min=0, note, prefix="€" }) {
+  return (
+    <div style={{ marginBottom:12 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4 }}>
+        <span style={{ fontSize:9, letterSpacing:2, color:"#c2c8e2", textTransform:"uppercase" }}>{label}</span>
+        {note && <span style={{ fontSize:9, color:"#b8c0dd" }}>{note}</span>}
+      </div>
+      <div style={{ display:"flex", alignItems:"center", background:"#0b0b17", border:"1px solid #191929", borderRadius:4, overflow:"hidden" }}>
+        <span style={{ padding:"6px 9px", color:"#a8b0d0", fontSize:12, borderRight:"1px solid #111" }}>{prefix}</span>
+        <input type="number" value={value} min={min} step={step}
+          onChange={e=>onChange(Math.max(min,+e.target.value))}
+          style={{ background:"transparent", border:"none", outline:"none", color:"#d0d0f0", fontSize:13, padding:"6px 10px", width:"100%", fontFamily:"inherit" }} />
+      </div>
+    </div>
+  );
+}
+
+function PctInput({ label, value, onChange, min=0, max=30, step=0.5, note }) {
+  return (
+    <div style={{ marginBottom:12 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
+        <span style={{ fontSize:9, letterSpacing:2, color:"#c2c8e2", textTransform:"uppercase" }}>{label}</span>
+        <span style={{ fontSize:12, color:"#c0baff", fontWeight:600 }}>{value.toFixed(1)}%</span>
+      </div>
+      <input type="range" min={min} max={max} step={step} value={value}
+        onChange={e=>onChange(+e.target.value)}
+        style={{ width:"100%", accentColor:"#7c6fff" }} />
+      <div style={{ display:"flex", justifyContent:"space-between", marginTop:1 }}>
+        <span style={{ fontSize:8, color:"#7f8aad" }}>{min}%</span>
+        <span style={{ fontSize:8, color:"#7f8aad" }}>{max}%</span>
+      </div>
+      {note && <div style={{ fontSize:9, color:"#b8c0dd", marginTop:2 }}>{note}</div>}
+    </div>
+  );
+}
+
+function YearSlider({ value, onChange }) {
+  return (
+    <div style={{ marginBottom:12 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:5 }}>
+        <span style={{ fontSize:9, letterSpacing:2, color:"#c2c8e2", textTransform:"uppercase" }}>Horizon</span>
+        <span style={{ fontSize:13, color:"#c0baff", fontWeight:600 }}>{value} yr</span>
+      </div>
+      <input type="range" min={1} max={30} step={1} value={value} onChange={e=>onChange(+e.target.value)}
+        style={{ width:"100%", accentColor:"#7c6fff" }} />
+      <div style={{ display:"flex", justifyContent:"space-between", marginTop:1 }}>
+        <span style={{ fontSize:8, color:"#7f8aad" }}>1y</span>
+        <span style={{ fontSize:8, color:"#7f8aad" }}>30y</span>
+      </div>
+    </div>
+  );
+}
+
+function GrowthChart({ chartData, selectedBrokers, showReal }) {
+  const key = showReal ? "real" : "nominal";
+  const allVals = chartData.flatMap(d => selectedBrokers.map(bid=>d[bid+"_"+key]||0).concat(d.invested||0));
+  const maxV = Math.max(...allVals, 1);
+  const H = 170;
+  const brokerColors = Object.fromEntries(BROKERS.map(b=>[b.id,b.color]));
+
+  return (
+    <div style={{ overflowX:"auto" }}>
+      <div style={{ position:"relative", height:H+36, minWidth: Math.max(chartData.length*52, 360), paddingLeft:62 }}>
+        {[0,0.25,0.5,0.75,1].map(f=>(
+          <div key={f} style={{ position:"absolute", left:0, top:H*(1-f)-7, width:58, textAlign:"right" }}>
+            <span style={{ fontSize:8, color:"#1e1e34" }}>{fmt(maxV*f)}</span>
+          </div>
+        ))}
+        {[0.25,0.5,0.75,1].map(f=>(
+          <div key={f} style={{ position:"absolute", left:62, right:0, top:H*(1-f), height:1, background:"#0d0d1a" }} />
+        ))}
+        <div style={{ display:"flex", alignItems:"flex-end", gap:5, height:H }}>
+          {chartData.map((d,i)=>{
+            const bw = Math.max(5, Math.min(18, Math.floor(38/(selectedBrokers.length+1))));
+            return (
+              <div key={i} style={{ display:"flex", alignItems:"flex-end", gap:2, flexShrink:0, position:"relative" }}>
+                <div title={`Invested: ${fmt(d.invested)}`}
+                  style={{ width:bw, height:Math.round((d.invested/maxV)*H), background:"#6f789d", borderRadius:"2px 2px 0 0" }} />
+                {selectedBrokers.map(bid=>(
+                  <div key={bid} title={`${BROKERS.find(b=>b.id===bid).name}: ${fmt(d[bid+"_"+key])}`}
+                    style={{ width:bw, height:Math.round(((d[bid+"_"+key]||0)/maxV)*H),
+                      background:brokerColors[bid], borderRadius:"2px 2px 0 0", opacity:0.88 }} />
+                ))}
+                <div style={{ position:"absolute", bottom:-18, left:0, right:0, textAlign:"center", fontSize:8, color:"#9aa4c8" }}>Y{d.year}</div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{ display:"flex", gap:14, flexWrap:"wrap", paddingTop:8, paddingLeft:62 }}>
+        <span style={{ fontSize:9, color:"#9aa4c8" }}>■ Invested (nominal)</span>
+        {selectedBrokers.map(bid=>{
+          const b=BROKERS.find(x=>x.id===bid);
+          return <span key={bid} style={{ fontSize:9, color:b.color }}>■ {b.name}</span>;
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ─── MAIN APP ─────────────────────────────────────────────────────────────────
+
+function App() {
+  // Investment params
+  const [lumpsum,     setLumpsum]     = useState(15000);
+  const [periodicAmt, setPeriodicAmt] = useState(1000);
+  const [freqId,      setFreqId]      = useState("monthly");
+  const [years,       setYears]       = useState(10);
+  const [grossReturn, setGrossReturn] = useState(8.0);
+  const [inflation,   setInflation]   = useState(2.5);
+  const [useSavingsPlan, setUseSavingsPlan] = useState(true);
+  const [showReal,    setShowReal]    = useState(false);
+
+  // ETF selection
+  const [selectedEtfs,   setSelectedEtfs]   = useState(["vwce","ainf","nukl"]);
+  const [etfWeightsRaw,  setEtfWeightsRaw]  = useState({vwce:60,ainf:25,nukl:15});
+  const [filterCat,      setFilterCat]      = useState("All");
+
+  // Broker selection
+  const [selectedBrokers, setSelectedBrokers] = useState(["degiro","abn","scalable_free","tr","ibkr"]);
+
+  const freq        = FREQS.find(f=>f.id===freqId);
+  const tradesCount = Math.floor(years*12/freq.months);
+  const totalInvested = lumpsum + periodicAmt * tradesCount;
+
+  // Normalise weights
+  const totalW = selectedEtfs.reduce((s,id)=>s+(etfWeightsRaw[id]||0),0);
+  const etfWeights = selectedEtfs.map(id=>({
+    etf: ALL_ETFS.find(e=>e.id===id),
+    w: totalW>0 ? (etfWeightsRaw[id]||0)/totalW : 1/selectedEtfs.length,
+  }));
+  const avgTer = etfWeights.reduce((s,{etf,w})=>s+etf.ter*w, 0);
+  const realReturn = ((1+grossReturn/100)/(1+inflation/100)-1)*100;
+
+  // Run simulations
+  const results = useMemo(()=>Object.fromEntries(
+    selectedBrokers.map(bid=>{
+      const broker=BROKERS.find(b=>b.id===bid);
+      return [bid, simulate({lumpsum,periodicAmt,freqMonths:freq.months,years,
+        etfWeights,broker,grossReturn,inflation,useSavingsPlan})];
+    })
+  ),[lumpsum,periodicAmt,freqId,years,grossReturn,inflation,useSavingsPlan,
+     JSON.stringify(etfWeights.map(e=>({id:e.etf.id,w:e.w}))),
+     JSON.stringify(selectedBrokers)]);
+
+  const chartData = useMemo(()=>{
+    const bids=Object.keys(results);
+    if(!bids.length) return [];
+    return results[bids[0]].snapshots.filter(s=>s.year>0).map(s=>{
+      const pt={year:s.year, invested:s.invested};
+      bids.forEach(bid=>{
+        const snap=results[bid].snapshots.find(x=>x.year===s.year);
+        if(snap){ pt[bid+"_nominal"]=snap.nominal; pt[bid+"_real"]=snap.real; }
+      });
+      return pt;
+    });
+  },[results]);
+
+  function toggleEtf(id) {
+    if(selectedEtfs.includes(id)){
+      if(selectedEtfs.length===1) return;
+      setSelectedEtfs(p=>p.filter(e=>e!==id));
+      setEtfWeightsRaw(p=>{const n={...p};delete n[id];return n;});
+    } else {
+      setSelectedEtfs(p=>[...p,id]);
+      setEtfWeightsRaw(p=>({...p,[id]:10}));
+    }
+  }
+  function toggleBroker(id) {
+    setSelectedBrokers(p=>p.includes(id)?(p.length>1?p.filter(b=>b!==id):p):[...p,id]);
+  }
+
+  // Sort brokers for results display by final nominal value (best first)
+  const sortedBrokers = [...selectedBrokers].sort((a,b)=>
+    (results[b]?.finalNominal||0)-(results[a]?.finalNominal||0));
+
+  const CSS = `
+    @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@700;800&display=swap');
+    *{box-sizing:border-box;margin:0;padding:0;}
+    ::-webkit-scrollbar{width:4px;height:4px;}
+    ::-webkit-scrollbar-thumb{background:#171728;border-radius:2px;}
+    input[type=range]{-webkit-appearance:none;height:3px;border-radius:2px;background:#131320;cursor:pointer;}
+    input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:#7c6fff;border:2px solid #08080f;cursor:pointer;}
+    input[type=number]::-webkit-inner-spin-button{opacity:.2;}
+    .etf-row{display:flex;align-items:center;gap:7px;padding:6px 8px;border:1px solid #0d0d1a;border-radius:3px;cursor:pointer;transition:border-color .12s;margin-bottom:4px;}
+    .etf-row:hover{border-color:#7f8aad;}
+    .etf-row.sel{border-color:#7c6fff44;background:rgba(124,111,255,.05);}
+    .broker-chip{cursor:pointer;padding:7px 11px;border:1px solid #0d0d1a;border-radius:4px;background:transparent;font-family:inherit;transition:all .14s;text-align:left;width:100%;margin-bottom:5px;}
+    .broker-chip:hover{border-color:#7f8aad;}
+    .cat-btn{cursor:pointer;border:1px solid #0d0d1a;background:transparent;color:#b8c0dd;font-family:inherit;font-size:9px;padding:3px 7px;border-radius:2px;letter-spacing:1px;transition:all .12s;}
+    .cat-btn.on{border-color:#7c6fff;color:#c0baff;background:rgba(124,111,255,.08);}
+    .cat-btn:hover{color:#dde2f5;}
+    .card{background:#0c0c1c;border:1px solid #101020;border-radius:6px;padding:16px;}
+    .w-input{background:#0b0b17;border:1px solid #141424;border-radius:2px;color:#c0c0f0;font-family:inherit;font-size:11px;width:46px;padding:3px 5px;text-align:right;outline:none;}
+    .w-input:focus{border-color:#7c6fff44;}
+    .toggle{display:inline-flex;align-items:center;gap:7px;cursor:pointer;font-size:10px;color:#d0d5ec;}
+    .toggle input{display:none;}
+    .toggle-track{width:28px;height:15px;background:#111;border:1px solid #7f8aad;border-radius:8px;position:relative;transition:background .15s;}
+    .toggle-track.on{background:#7c6fff;border-color:#7c6fff;}
+    .toggle-thumb{position:absolute;top:2px;left:2px;width:9px;height:9px;background:#fff;border-radius:50%;transition:left .15s;}
+    .toggle-thumb.on{left:15px;}
+    tr:hover td{background:rgba(255,255,255,.008);}
+    .hl-row td{background:rgba(124,111,255,.04)!important;}
+  `;
+
+  return (
+    <div style={{ fontFamily:"'IBM Plex Mono',monospace", background:"#08080f", minHeight:"100vh", color:"#c8c8e0", fontSize:12 }}>
+      <style>{CSS}</style>
+
+      {/* STICKY HEADER */}
+      <div style={{ position:"sticky",top:0,zIndex:100,background:"rgba(8,8,15,0.96)",backdropFilter:"blur(8px)",borderBottom:"1px solid #0e0e1c",padding:"10px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8 }}>
+        <div>
+          <div style={{ fontSize:8,letterSpacing:4,color:"#7f8aad",marginBottom:2 }}>ETF PORTFOLIO SIMULATOR // NL</div>
+          <h1 style={{ fontFamily:"'Syne',sans-serif",fontSize:17,fontWeight:800,color:"#e0e0ff",letterSpacing:-0.3 }}>Portfolio Cost Calculator</h1>
+        </div>
+        <div style={{ display:"flex",gap:16,flexWrap:"wrap",alignItems:"center" }}>
+          {[
+            {l:"Total invested", v:fmt(totalInvested), c:"#c0c0f0"},
+            {l:"Avg TER",        v:pct(avgTer),        c:avgTer>.5?"#fb923c":avgTer>.3?"#facc15":"#4ade80"},
+            {l:"Gross / Real",   v:`${grossReturn.toFixed(1)}% / ${realReturn.toFixed(1)}%`, c:"#7c6fff"},
+            {l:"Inflation",      v:`${inflation.toFixed(1)}%`, c:"#888"},
+          ].map(s=>(
+            <div key={s.l} style={{ textAlign:"right" }}>
+              <div style={{ fontSize:12,fontWeight:600,color:s.c }}>{s.v}</div>
+              <div style={{ fontSize:8,color:"#7f8aad",letterSpacing:2 }}>{s.l.toUpperCase()}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* TWO-COLUMN */}
+      <div style={{ display:"flex",minHeight:"calc(100vh - 49px)" }}>
+
+        {/* ══ SIDEBAR ══ */}
+        <div style={{ width:264,flexShrink:0,position:"sticky",top:49,alignSelf:"flex-start",height:"calc(100vh - 49px)",overflowY:"auto",borderRight:"1px solid #0d0d1a",padding:14,background:"#090916" }}>
+
+          {/* ── Investment ── */}
+          <div style={{ fontSize:9,letterSpacing:3,color:"#8993b8",marginBottom:10 }}>INVESTMENT</div>
+          <NumInput label="Lump sum" value={lumpsum} onChange={setLumpsum} step={1000} />
+          <NumInput label="Periodic amount" value={periodicAmt} onChange={setPeriodicAmt} step={100} />
+
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontSize:9,letterSpacing:2,color:"#c2c8e2",textTransform:"uppercase",marginBottom:6 }}>Frequency</div>
+            <div style={{ display:"flex",flexWrap:"wrap",gap:4 }}>
+              {FREQS.map(f=>(
+                <button key={f.id} onClick={()=>setFreqId(f.id)} style={{
+                  cursor:"pointer",fontFamily:"inherit",fontSize:10,padding:"4px 9px",
+                  border:`1px solid ${freqId===f.id?"#7c6fff":"#111"}`,
+                  background:freqId===f.id?"rgba(124,111,255,.1)":"transparent",
+                  color:freqId===f.id?"#c0baff":"#b4bcda",borderRadius:3,transition:"all .14s"
+                }}>{f.label}</button>
+              ))}
+            </div>
+          </div>
+
+          <YearSlider value={years} onChange={setYears} />
+
+          {/* Savings plan toggle */}
+          <div style={{ marginBottom:14,padding:"8px 10px",background:"#0a0a16",border:"1px solid #0f0f1c",borderRadius:4 }}>
+            <label className="toggle" onClick={()=>setUseSavingsPlan(p=>!p)}>
+              <div className={`toggle-track ${useSavingsPlan?"on":""}`}>
+                <div className={`toggle-thumb ${useSavingsPlan?"on":""}`} />
+              </div>
+              <span style={{ color:useSavingsPlan?"#c0baff":"#c2c8e2" }}>Use savings plan where available</span>
+            </label>
+            <div style={{ fontSize:9,color:"#8993b8",marginTop:5,lineHeight:1.5 }}>
+              Scalable & Trade Republic offer €0 savings plans. Toggle off to use manual trade fees instead.
+            </div>
+          </div>
+
+          {/* ── Model params ── */}
+          <div style={{ fontSize:9,letterSpacing:3,color:"#8993b8",marginBottom:10,marginTop:16 }}>MODEL PARAMETERS</div>
+          <PctInput label="Gross return / year" value={grossReturn} onChange={setGrossReturn} min={0} max={20} step={0.5}
+            note="Historical world equity avg ~8–10% nominal" />
+          <PctInput label="Annual inflation" value={inflation} onChange={setInflation} min={0} max={15} step={0.1}
+            note={`Real return: ${realReturn.toFixed(2)}% (Fisher equation)`} />
+
+          <div style={{ background:"#0a0a16",border:"1px solid #0f0f1c",borderRadius:4,padding:"8px 10px",fontSize:9,color:"#8993b8",lineHeight:1.8,marginBottom:14 }}>
+            <span style={{color:"#b8c0dd"}}>Nominal:</span> portfolio grows at {grossReturn.toFixed(1)}%/yr<br/>
+            <span style={{color:"#b8c0dd"}}>Real:</span> purchasing power at {realReturn.toFixed(2)}%/yr<br/>
+            <span style={{color:"#b8c0dd"}}>TER drag:</span> {pct(avgTer)} applied monthly
+          </div>
+
+          {/* ── Brokers ── */}
+          <div style={{ fontSize:9,letterSpacing:3,color:"#8993b8",marginBottom:10,marginTop:4 }}>BROKERS</div>
+          {[
+            {group:"NL", label:"Netherlands"},
+            {group:"EU", label:"Europe"},
+            {group:"Global", label:"Global"},
+          ].map(({group,label})=>(
+            <div key={group} style={{ marginBottom:10 }}>
+              <div style={{ fontSize:8,color:"#7f8aad",letterSpacing:2,marginBottom:5,textTransform:"uppercase" }}>{label}</div>
+              {BROKERS.filter(b=>b.group===group).map(b=>{
+                const sel=selectedBrokers.includes(b.id);
+                return (
+                  <button key={b.id} className="broker-chip" onClick={()=>toggleBroker(b.id)}
+                    style={{ borderColor:sel?`${b.color}88`:"#0d0d1a" }}>
+                    <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center" }}>
+                      <span style={{ color:sel?b.color:"#b4bcda",fontWeight:500,fontSize:11 }}>{b.name}</span>
+                      <span style={{ fontSize:10,color:sel?"#4ade80":"#7f8aad" }}>{sel?"✓":""}</span>
+                    </div>
+                    <div style={{ fontSize:9,color:"#8790b2",marginTop:2,lineHeight:1.4 }}>{b.note}</div>
+                  </button>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+
+        {/* ══ MAIN CONTENT ══ */}
+        <div style={{ flex:1,overflowY:"auto",padding:"18px 20px",minWidth:0 }}>
+
+          {/* ─ SECTION 1: ETF SELECTION ─ */}
+          <Divider label="① Select ETFs" />
+          <div style={{ display:"flex",flexWrap:"wrap",gap:4,marginBottom:10 }}>
+            {["All",...CATEGORIES].map(c=>(
+              <button key={c} className={`cat-btn ${filterCat===c?"on":""}`} onClick={()=>setFilterCat(c)}>{c}</button>
+            ))}
+          </div>
+          <div style={{ maxHeight:280,overflowY:"auto",marginBottom:14 }}>
+            {ALL_ETFS.filter(e=>filterCat==="All"||e.category===filterCat).map(etf=>{
+              const sel=selectedEtfs.includes(etf.id);
+              return (
+                <div key={etf.id} className={`etf-row ${sel?"sel":""}`} onClick={()=>toggleEtf(etf.id)}>
+                  <div style={{ width:12,height:12,border:"1px solid",borderColor:sel?"#7c6fff":"#7f8aad",borderRadius:2,background:sel?"#7c6fff":"transparent",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center" }}>
+                    {sel&&<span style={{color:"#fff",fontSize:8}}>✓</span>}
+                  </div>
+                  <div style={{ flex:1,minWidth:0 }}>
+                    <div style={{ display:"flex",gap:5,alignItems:"center" }}>
+                      <span style={{ fontWeight:600,color:sel?"#c0baff":"#dde2f5",fontSize:12 }}>{etf.ticker}</span>
+                      <span style={{ fontSize:9,color:"#7f8aad",border:"1px solid #111",padding:"1px 4px",borderRadius:2 }}>{etf.category}</span>
+                      {etf.acc&&<span style={{ fontSize:9,color:"#1a3a25",border:"1px solid #0a2018",padding:"1px 4px",borderRadius:2 }}>Acc</span>}
+                    </div>
+                    <div style={{ fontSize:10,color:"#9aa4c8",marginTop:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap" }}>{etf.name}</div>
+                  </div>
+                  <div style={{ textAlign:"right",flexShrink:0 }}>
+                    <div style={{ fontSize:12,fontWeight:600,color:etf.ter>.6?"#fb923c":etf.ter>.4?"#facc15":"#4ade80" }}>{etf.ter}%</div>
+                    <div style={{ fontSize:8,color:"#7f8aad" }}>TER</div>
+                  </div>
+                  <div style={{ display:"flex",gap:2,flexShrink:0 }}>
+                    {[1,2,3,4,5].map(r=><div key={r} style={{ width:4,height:4,borderRadius:"50%",background:r<=etf.risk?RISK_COLOR[etf.risk]:"#0f0f1c" }} />)}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ─ SECTION 2: WEIGHTS ─ */}
+          {selectedEtfs.length>0 && (<>
+            <Divider label="② Portfolio weights" />
+            <div className="card">
+              <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12 }}>
+                <span style={{ fontSize:9,letterSpacing:3,color:"#a8b0d0" }}>ALLOCATION</span>
+                <span style={{ fontSize:10 }}>Avg TER: <span style={{ fontWeight:600,color:avgTer>.5?"#fb923c":avgTer>.3?"#facc15":"#4ade80" }}>{pct(avgTer)}</span></span>
+              </div>
+              <div style={{ display:"flex",height:7,borderRadius:3,overflow:"hidden",marginBottom:14 }}>
+                {etfWeights.map(({etf,w},i)=>(
+                  <div key={etf.id} title={`${etf.ticker} ${(w*100).toFixed(1)}%`}
+                    style={{ flex:w,background:`hsl(${(i*53+195)%360},58%,52%)`,transition:"flex .3s" }} />
+                ))}
+              </div>
+              {etfWeights.map(({etf,w},i)=>(
+                <div key={etf.id} style={{ display:"flex",alignItems:"center",gap:7,marginBottom:8 }}>
+                  <div style={{ width:7,height:7,borderRadius:"50%",background:`hsl(${(i*53+195)%360},58%,52%)`,flexShrink:0 }} />
+                  <span style={{ fontWeight:600,color:"#c0baff",width:38,flexShrink:0 }}>{etf.ticker}</span>
+                  <div style={{ flex:1,height:3,background:"#0d0d1a",borderRadius:2,overflow:"hidden" }}>
+                    <div style={{ height:"100%",width:`${w*100}%`,background:`hsl(${(i*53+195)%360},58%,42%)`,transition:"width .3s" }} />
+                  </div>
+                  <input type="number" className="w-input" value={etfWeightsRaw[etf.id]||0} min={0} max={100}
+                    onClick={e=>e.stopPropagation()}
+                    onChange={e=>{e.stopPropagation();setEtfWeightsRaw(p=>({...p,[etf.id]:Math.max(0,Math.min(100,+e.target.value))}));}} />
+                  <span style={{ color:"#d0d5ec",width:32,textAlign:"right" }}>{(w*100).toFixed(0)}%</span>
+                  <span style={{ color:"#8993b8",width:40,textAlign:"right" }}>{etf.ter}% TER</span>
+                </div>
+              ))}
+              <div style={{ fontSize:9,color:"#808bad",textAlign:"right",marginTop:4 }}>Weights auto-normalise to 100%</div>
+            </div>
+          </>)}
+
+          {/* ─ SECTION 3: RESULT SUMMARY CARDS ─ */}
+          <Divider label="③ Results" />
+          <div style={{ display:"flex",gap:8,alignItems:"center",marginBottom:12,flexWrap:"wrap" }}>
+            <label className="toggle" onClick={()=>setShowReal(p=>!p)}>
+              <div className={`toggle-track ${showReal?"on":""}`}>
+                <div className={`toggle-thumb ${showReal?"on":""}`} />
+              </div>
+              <span style={{ color:showReal?"#c0baff":"#d0d5ec" }}>Show real (inflation-adjusted) values</span>
+            </label>
+            <span style={{ fontSize:9,color:"#8993b8" }}>
+              {showReal ? `Inflation: ${inflation.toFixed(1)}% · Real return: ${realReturn.toFixed(2)}%` : `Nominal at ${grossReturn.toFixed(1)}% gross/yr`}
+            </span>
+          </div>
+
+          <div style={{ display:"grid",gridTemplateColumns:`repeat(${Math.min(sortedBrokers.length,3)},1fr)`,gap:10,marginBottom:0 }}>
+            {sortedBrokers.map((bid,rank)=>{
+              const b=BROKERS.find(x=>x.id===bid);
+              const r=results[bid]; if(!r) return null;
+              const finalVal = showReal ? r.finalReal : r.finalNominal;
+              const gain=finalVal-r.totalInvested;
+              const isBest=rank===0&&sortedBrokers.length>1;
+              return (
+                <div key={bid} className="card" style={{ borderColor:isBest?`${b.color}55`:`${b.color}18`,position:"relative" }}>
+                  {isBest&&<div style={{ position:"absolute",top:0,right:0,background:b.color,color:"#000",fontSize:8,padding:"2px 7px",borderRadius:"0 5px 0 3px",fontWeight:700,letterSpacing:1 }}>BEST</div>}
+                  {rank===sortedBrokers.length-1&&sortedBrokers.length>1&&
+                    <div style={{ position:"absolute",top:0,right:0,background:"#7f8aad",color:"#dde2f5",fontSize:8,padding:"2px 7px",borderRadius:"0 5px 0 3px" }}>MOST COSTLY</div>}
+                  <div style={{ color:b.color,fontSize:10,fontWeight:600,marginBottom:12,letterSpacing:1 }}>{b.name.toUpperCase()}</div>
+                  <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:10 }}>
+                    {[
+                      {v:fmt(Math.round(finalVal)),          l:showReal?"Final (real)":"Final (nominal)", c:"#e0e0ff", big:true},
+                      {v:fmt(Math.round(gain)),               l:`Gain (${years}y)`,  c:gain>0?"#4ade80":"#f87171", big:true},
+                      {v:fmt(Math.round(r.totalInvested)),    l:"Total invested",    c:"#e5e8f8"},
+                      {v:fmt(Math.round(r.totalCosts)),       l:"All-in costs",      c:"#fb923c"},
+                      {v:fmt(Math.round(r.totalTxCost)),      l:"Tx fees",           c:"#facc15"},
+                      {v:fmt(Math.round(r.totalTerCost)),     l:"TER drag",          c:"#f87171"},
+                      {v:fmt(Math.round(r.totalPlatformFee+r.totalSubscription)), l:"Platform+sub", c:"#fb923c"},
+                      {v:pct((r.totalCosts/r.totalInvested)*100,2), l:"Cost/invested", c:"#dde2f5"},
+                    ].map((s,i)=>(
+                      <div key={i}>
+                        <div style={{ fontSize:s.big?17:12,fontWeight:s.big?700:500,color:s.c,marginBottom:1 }}>{s.v}</div>
+                        <div style={{ fontSize:8,letterSpacing:1,color:"#7f8aad",textTransform:"uppercase" }}>{s.l}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ─ SECTION 4: CHART ─ */}
+          <Divider label="④ Growth chart" />
+          <div className="card">
+            <div style={{ display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,flexWrap:"wrap",gap:8 }}>
+              <div style={{ fontSize:9,letterSpacing:3,color:"#a8b0d0" }}>
+                PORTFOLIO VALUE OVER TIME — {showReal?"REAL (INFLATION-ADJUSTED)":"NOMINAL"} · {grossReturn.toFixed(1)}% GROSS / {inflation.toFixed(1)}% INFLATION
+              </div>
+            </div>
+            <GrowthChart chartData={chartData} selectedBrokers={selectedBrokers} showReal={showReal} />
+          </div>
+
+          {/* ─ SECTION 5: YEAR-BY-YEAR TABLE ─ */}
+          <Divider label="⑤ Year-by-year" />
+          <div className="card">
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ fontSize:11 }}>
+                <thead>
+                  <tr style={{ borderBottom:"1px solid #0d0d1a" }}>
+                    <th style={{ padding:"5px 10px",textAlign:"left",color:"#8993b8",fontWeight:400,fontSize:9,letterSpacing:1 }}>YR</th>
+                    <th style={{ padding:"5px 10px",textAlign:"right",color:"#8993b8",fontWeight:400,fontSize:9,letterSpacing:1 }}>INVESTED</th>
+                    {sortedBrokers.map(bid=>{
+                      const b=BROKERS.find(x=>x.id===bid);
+                      return <th key={bid} style={{ padding:"5px 10px",textAlign:"right",color:b.color,fontWeight:400,fontSize:9,letterSpacing:1,whiteSpace:"nowrap" }}>{b.name}</th>;
+                    })}
+                    {sortedBrokers.length>1&&<th style={{ padding:"5px 10px",textAlign:"right",color:"#8993b8",fontWeight:400,fontSize:9 }}>Δ BEST–WORST</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {chartData.map((d,i)=>{
+                    const key=showReal?"real":"nominal";
+                    const vals=sortedBrokers.map(bid=>d[bid+"_"+key]||0);
+                    const best=Math.max(...vals), worst=Math.min(...vals);
+                    return (
+                      <tr key={i} style={{ borderBottom:"1px solid #0b0b18",background:i%2?"rgba(255,255,255,.008)":"transparent" }}>
+                        <td style={{ padding:"5px 10px",color:"#9aa4c8" }}>Y{d.year}</td>
+                        <td style={{ padding:"5px 10px",textAlign:"right",color:"#7f8aad" }}>{fmt(d.invested)}</td>
+                        {sortedBrokers.map(bid=>{
+                          const v=d[bid+"_"+key]||0;
+                          const isB=v===best&&sortedBrokers.length>1,isW=v===worst&&sortedBrokers.length>1;
+                          return <td key={bid} style={{ padding:"5px 10px",textAlign:"right",color:isB?"#4ade80":isW?"#f87171":"#dde2f5",fontWeight:isB||isW?600:400 }}>{fmt(v)}</td>;
+                        })}
+                        {sortedBrokers.length>1&&<td style={{ padding:"5px 10px",textAlign:"right",color:"#7c6fff",fontWeight:500 }}>{fmt(best-worst)}</td>}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* ─ SECTION 6: PORTFOLIO COMPOSITION ─ */}
+          <Divider label="⑥ Portfolio composition" />
+          <div className="card">
+            <table style={{ fontSize:11 }}>
+              <thead>
+                <tr style={{ borderBottom:"1px solid #0d0d1a" }}>
+                  {["ETF","Category","ISIN","TER","Weight","TER contrib.","Acc","Risk"].map(h=>(
+                    <th key={h} style={{ padding:"5px 10px",textAlign:"left",color:"#8993b8",fontWeight:400,fontSize:9,letterSpacing:1,whiteSpace:"nowrap" }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {etfWeights.map(({etf,w})=>(
+                  <tr key={etf.id} style={{ borderBottom:"1px solid #0b0b18" }}>
+                    <td style={{ padding:"6px 10px",fontWeight:600,color:"#c0baff" }}>{etf.ticker}</td>
+                    <td style={{ padding:"6px 10px",color:"#b4bcda" }}>{etf.category}</td>
+                    <td style={{ padding:"6px 10px",color:"#6f789d",fontSize:10 }}>{etf.isin}</td>
+                    <td style={{ padding:"6px 10px",color:etf.ter>.6?"#fb923c":etf.ter>.4?"#facc15":"#4ade80" }}>{etf.ter}%</td>
+                    <td style={{ padding:"6px 10px" }}>
+                      <div style={{ display:"flex",alignItems:"center",gap:6 }}>
+                        <div style={{ width:32,height:3,background:"#0d0d1a",borderRadius:2,overflow:"hidden" }}>
+                          <div style={{ height:"100%",width:`${w*100}%`,background:"#7c6fff" }} />
+                        </div>
+                        <span style={{ color:"#dde2f5" }}>{(w*100).toFixed(1)}%</span>
+                      </div>
+                    </td>
+                    <td style={{ padding:"6px 10px",color:"#facc15" }}>{pct(etf.ter*w,3)}</td>
+                    <td style={{ padding:"6px 10px" }}>{etf.acc?"✅":"📤"}</td>
+                    <td style={{ padding:"6px 10px" }}>
+                      <div style={{ display:"flex",gap:2 }}>
+                        {[1,2,3,4,5].map(r=><div key={r} style={{ width:5,height:5,borderRadius:2,background:r<=etf.risk?RISK_COLOR[etf.risk]:"#0f0f1c" }} />)}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                <tr style={{ borderTop:"1px solid #7f8aad" }}>
+                  <td colSpan={5} style={{ padding:"6px 10px",color:"#a8b0d0",fontStyle:"italic" }}>Weighted average</td>
+                  <td style={{ padding:"6px 10px",fontWeight:600,color:avgTer>.5?"#fb923c":avgTer>.3?"#facc15":"#4ade80" }}>{pct(avgTer,3)}</td>
+                  <td colSpan={2} />
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          {/* ─ SECTION 7: COST BREAKDOWN ─ */}
+          <Divider label="⑦ Cost breakdown" />
+          <div className="card" style={{ marginBottom:16 }}>
+            <div style={{ overflowX:"auto" }}>
+              <table style={{ fontSize:11 }}>
+                <thead>
+                  <tr style={{ borderBottom:"1px solid #0d0d1a" }}>
+                    <th style={{ padding:"5px 10px",textAlign:"left",color:"#8993b8",fontWeight:400,fontSize:9,letterSpacing:1,minWidth:180 }}>COST COMPONENT</th>
+                    {sortedBrokers.map(bid=>{
+                      const b=BROKERS.find(x=>x.id===bid);
+                      return <th key={bid} style={{ padding:"5px 10px",textAlign:"right",color:b.color,fontWeight:400,fontSize:9,letterSpacing:1,whiteSpace:"nowrap" }}>{b.name}</th>;
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {[
+                    {label:"Lump sum tx fee",                           fn:(r,bid)=>{const isSP=useSavingsPlan&&BROKERS.find(b=>b.id===bid).savingsPlan;return fmt(BROKERS.find(b=>b.id===bid).txFee(lumpsum,false));}},
+                    {label:`Periodic tx × ${tradesCount}`,              fn:(r,bid)=>{const b=BROKERS.find(x=>x.id===bid);const isSP=useSavingsPlan&&b.savingsPlan;return fmt(Math.round(b.txFee(periodicAmt,isSP)*tradesCount));}},
+                    {label:"Platform / service fee",                    fn:(r)=>fmt(Math.round(r.totalPlatformFee))},
+                    {label:"Subscriptions",                             fn:(r)=>fmt(Math.round(r.totalSubscription))},
+                    {label:`TER drag (avg ${pct(avgTer)})`,             fn:(r)=>fmt(Math.round(r.totalTerCost))},
+                    {label:"Broker subtotal (excl. TER)",               fn:(r)=>fmt(Math.round(r.totalTxCost+r.totalPlatformFee+r.totalSubscription)), bold:true},
+                    {label:"Total all-in cost",                         fn:(r)=>fmt(Math.round(r.totalCosts)), bold:true},
+                    {label:"Cost / total invested",                     fn:(r)=>pct((r.totalCosts/r.totalInvested)*100,2), bold:true},
+                  ].map((row,i)=>(
+                    <tr key={i} className={row.bold?"hl-row":""} style={{ borderBottom:"1px solid #0b0b18" }}>
+                      <td style={{ padding:"6px 10px",color:row.bold?"#c0baff":"#c2c8e2",fontWeight:row.bold?500:400 }}>{row.label}</td>
+                      {sortedBrokers.map(bid=>{
+                        const r=results[bid]; if(!r) return <td key={bid}/>;
+                        return <td key={bid} style={{ padding:"6px 10px",textAlign:"right",color:row.bold?"#fff":"#d0d5ec",fontWeight:row.bold?600:400 }}>
+                          {row.fn(r,bid)}
+                        </td>;
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* ─ SECTION 8: BROKER NOTES ─ */}
+          <Divider label="⑧ Broker details" />
+          <div style={{ display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:10,marginBottom:16 }}>
+            {sortedBrokers.map(bid=>{
+              const b=BROKERS.find(x=>x.id===bid);
+              return (
+                <div key={bid} className="card" style={{ borderColor:`${b.color}18` }}>
+                  <div style={{ color:b.color,fontSize:10,fontWeight:600,marginBottom:8 }}>{b.name}</div>
+                  <div style={{ fontSize:10,color:"#b4bcda",lineHeight:1.7 }}>{b.note}</div>
+                  <div style={{ marginTop:8,display:"flex",gap:8 }}>
+                    <span style={{ fontSize:9,padding:"2px 6px",border:"1px solid #111",borderRadius:2,color:"#7f8aad" }}>
+                      {b.group}
+                    </span>
+                    <span style={{ fontSize:9,padding:"2px 6px",border:"1px solid #111",borderRadius:2,color:b.savingsPlan?"#1a4a2a":"#2a1a1a" }}>
+                      {b.savingsPlan?"✓ Savings plan":"Manual only"}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* ─ ASSUMPTIONS ─ */}
+          <Divider label="Assumptions & notes" />
+          <div className="card" style={{ fontSize:10,color:"#1e1e34",lineHeight:1.9,marginBottom:40 }}>
+            <div style={{ display:"grid",gridTemplateColumns:"1fr 1fr",gap:20 }}>
+              <div>
+                <div style={{ color:"#a8b0d0",marginBottom:4 }}>Model</div>
+                Growth: {grossReturn.toFixed(1)}% gross nominal/yr · Inflation: {inflation.toFixed(1)}%/yr<br/>
+                Real return: {realReturn.toFixed(2)}%/yr (Fisher: (1+g)/(1+i)-1)<br/>
+                TER drag applied monthly. Use gross return before ETF costs, otherwise set TER to 0 to avoid double counting · Div. leakage not modelled<br/>
+                Assumes EUR share classes throughout · Box 3 not included
+              </div>
+              <div>
+                <div style={{ color:"#a8b0d0",marginBottom:4 }}>Brokers</div>
+                DEGIRO: €1/trade Core Selection (Tradegate)<br/>
+                ABN AMRO: €0 tx (base assortment) · tiered service fee: 0.20%/0.12%/0.06% p.a.<br/>
+                Scalable Free: €0 PRIME ETFs ≥€250 · €0 savings plans<br/>
+                Scalable PRIME+: same + €4.99/mo for all trades ≥€250<br/>
+                Trade Republic: €1/manual trade · €0 savings plan exec.<br/>
+                bunq Elite: approx. 0.495%/trade + €18.99/mo<br/>
+                IBKR Pro: €3/trade (≤€6k) + €0.75 Euronext fee · no platform fee
+              </div>
+            </div>
+          </div>
+
+        </div>{/* end main content */}
+      </div>{/* end two-column */}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+</script>
+</body>
+</html>
