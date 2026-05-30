@@ -17,6 +17,4 @@ Features:
 - Cost breakdown analysis
 
 Target audience:
-European investors, especially Netherlands-based investors.
-At 30 May 2026.
-Not investment advise, only for research purposes, do your own research.
+European investors, especially Netherlands-based investors. At 30 May 2026. Not investment advise, only for research purposes, do your own research.
